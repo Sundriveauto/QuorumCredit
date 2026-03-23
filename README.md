@@ -93,6 +93,20 @@ QuorumCredit/
 
 ---
 
+## 🛡️ Access Control Matrix
+
+| Function | Role Required | Description | Impact |
+|---|---|---|---|
+| `initialize` | **Deployer** | One-time setup of Admin and Token addresses. | Sets security foundation. |
+| `vouch` | **Voucher** | Stake XLM to back a borrower. | Increases borrower trust score. |
+| `request_loan` | **Borrower** | Withdraw loan funds to borrower wallet. | Disburses capital. |
+| `repay` | **Borrower** | Clear debt and distribute yield to vouchers. | Restores trust and rewards vouchers. |
+| `slash` | **Admin** | Signal default and burn 50% of voucher stakes. | Penalizes default; enforces risk. |
+| `get_loan` | **Anyone** | Read active loan records. | Transparency. |
+| `get_vouches` | **Anyone** | Read voucher lists for a borrower. | Transparency. |
+
+---
+
 ## Setup Instructions
 
 ### Requirements
@@ -290,27 +304,13 @@ graph LR
 
 ## Contributing
 
-Pull requests are welcome. For major changes, open an issue first.
+Contributions are what make the open-source community such an amazing place to learn, inspire, and create. Any contributions you make are **greatly appreciated**.
 
-```bash
-# Fork and create a branch
-git checkout -b feature/your-feature
-
-# Format code
-cargo fmt --all
-
-# Ensure tests pass
-cargo test
-
-# Commit and push
-git commit -m "Add: description of changes"
-```
-
-**Standards:**
-- All new features must include tests
-- Run `cargo fmt --all` before committing
-- Update this README for any interface changes
-- Security implications must be reviewed before merging
+Please refer to [CONTRIBUTING.md](CONTRIBUTING.md) for our full guidelines on:
+- Branch naming conventions
+- Commit message formats (Conventional Commits)
+- Pull Request workflow
+- Testing and Style guides
 
 ---
 
