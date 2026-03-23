@@ -15,6 +15,8 @@ const SLASH_BPS: i128 = 5000;
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum ContractError {
     InsufficientFunds = 1,
+    /// Borrower already has an active (non-repaid, non-defaulted) loan.
+    ActiveLoanExists = 2,
 }
 
 // ── Storage Keys ──────────────────────────────────────────────────────────────
@@ -101,6 +103,17 @@ impl QuorumCreditContract {
         threshold: i128,
     ) -> Result<(), ContractError> {
         borrower.require_auth();
+
+        // Reject if an active (non-repaid, non-defaulted) loan already exists.
+        if let Some(existing) = env
+            .storage()
+            .persistent()
+            .get::<DataKey, LoanRecord>(&DataKey::Loan(borrower.clone()))
+        {
+            if !existing.repaid && !existing.defaulted {
+                return Err(ContractError::ActiveLoanExists);
+            }
+        }
 
         let vouches: Vec<VouchRecord> = env
             .storage()
@@ -315,6 +328,24 @@ mod tests {
     }
 
     #[test]
+    fn test_duplicate_loan_request_rejected() {
+        let env = Env::default();
+        let (contract_id, _token_addr, _admin, borrower, voucher) = setup(&env);
+        let client = QuorumCreditContractClient::new(&env, &contract_id);
+
+        client.vouch(&voucher, &borrower, &1_000_000);
+        client.request_loan(&borrower, &500_000, &1_000_000);
+
+        // Second request_loan while first is still active should fail.
+        let result = client.try_request_loan(&borrower, &500_000, &1_000_000);
+        assert_eq!(
+            result,
+            Err(Ok(ContractError::ActiveLoanExists)),
+            "expected ActiveLoanExists error on duplicate loan request"
+        );
+    }
+
+    #[test]
     fn test_request_loan_underfunded_contract() {
         let env = Env::default();
         env.mock_all_auths();
@@ -333,7 +364,7 @@ mod tests {
         // Request a loan larger than the contract balance to trigger InsufficientFunds.
 
         QuorumCreditContractClient::new(&env, &contract_id)
-            .initialize(&admin, &token_id.address());
+            .initialize(&admin, &admin, &token_id.address());
 
         let client = QuorumCreditContractClient::new(&env, &contract_id);
         // Stake 1_000_000 — contract now holds exactly 1_000_000.
