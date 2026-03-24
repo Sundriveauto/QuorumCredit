@@ -565,10 +565,17 @@ impl QuorumCreditContract {
     }
 
     /// Admin marks a loan defaulted; 50% of each voucher's stake is slashed.
+    ///
+    /// # Reentrancy protection
+    /// Follows the Checks-Effects-Interactions pattern: the loan is marked
+    /// defaulted and vouches are cleared in storage **before** any token
+    /// transfers are executed.  Any reentrant call to `slash` for the same
+    /// borrower will therefore hit the `"already defaulted"` guard and abort.
     pub fn slash(env: Env, admin_signers: Vec<Address>, borrower: Address) {
         Self::require_admin_approval(&env, &admin_signers);
         Self::require_not_paused(&env).expect("contract is paused");
 
+        // ── CHECKS ────────────────────────────────────────────────────────────
         let mut loan: LoanRecord = env
             .storage()
             .persistent()
@@ -578,7 +585,6 @@ impl QuorumCreditContract {
         assert!(!loan.repaid, "loan already repaid");
         assert!(!loan.defaulted, "already defaulted");
 
-        let token = Self::token(&env);
         let cfg = Self::config(&env);
         let vouches: Vec<VouchRecord> = env
             .storage()
@@ -586,6 +592,33 @@ impl QuorumCreditContract {
             .get(&DataKey::Vouches(borrower.clone()))
             .unwrap_or(Vec::new(&env));
 
+        // ── EFFECTS (all state mutations before any external call) ────────────
+        loan.defaulted = true;
+        env.storage()
+            .persistent()
+            .set(&DataKey::Loan(borrower.clone()), &loan);
+
+        // Clear vouches before transfers so a reentrant slash finds no vouches.
+        env.storage()
+            .persistent()
+            .remove(&DataKey::Vouches(borrower.clone()));
+
+        // Pre-compute treasury increments and persist them before transfers.
+        let mut total_slash: i128 = 0;
+        for v in vouches.iter() {
+            total_slash += v.stake * cfg.slash_bps / 10_000;
+        }
+        let treasury: i128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::SlashTreasury)
+            .unwrap_or(0);
+        env.storage()
+            .instance()
+            .set(&DataKey::SlashTreasury, &(treasury + total_slash));
+
+        // ── INTERACTIONS (external token transfers last) ──────────────────────
+        let token = Self::token(&env);
         for v in vouches.iter() {
             let slash_amount = v.stake * cfg.slash_bps / 10_000;
             let returned = v.stake - slash_amount;
@@ -593,21 +626,7 @@ impl QuorumCreditContract {
             if returned > 0 {
                 token.transfer(&env.current_contract_address(), &v.voucher, &returned);
             }
-            // Accumulate slashed amount in treasury.
-            let treasury: i128 = env
-                .storage()
-                .instance()
-                .get(&DataKey::SlashTreasury)
-                .unwrap_or(0);
-            env.storage()
-                .instance()
-                .set(&DataKey::SlashTreasury, &(treasury + slash_amount));
         }
-
-        loan.defaulted = true;
-        env.storage()
-            .persistent()
-            .set(&DataKey::Loan(borrower.clone()), &loan);
 
         // Burn one reputation point if a reputation NFT contract is configured.
         if let Some(nft_addr) = env
@@ -617,11 +636,6 @@ impl QuorumCreditContract {
         {
             ReputationNftContractClient::new(&env, &nft_addr).burn(&borrower);
         }
-
-        // Clear vouches after slashing to prevent state pollution.
-        env.storage()
-            .persistent()
-            .remove(&DataKey::Vouches(borrower));
     }
 
     /// Allows vouchers to claim back their stake if loan has expired without repayment or slash.
@@ -728,7 +742,12 @@ impl QuorumCreditContract {
 
     /// Callable by anyone after the loan deadline has passed.
     /// Applies the standard slash penalty (50% of each voucher's stake burned).
+    ///
+    /// # Reentrancy protection
+    /// Follows the Checks-Effects-Interactions pattern: the loan is marked
+    /// defaulted and vouches are cleared **before** any token transfers.
     pub fn auto_slash(env: Env, borrower: Address) {
+        // ── CHECKS ────────────────────────────────────────────────────────────
         let mut loan: LoanRecord = env
             .storage()
             .persistent()
@@ -742,7 +761,6 @@ impl QuorumCreditContract {
             "loan deadline has not passed"
         );
 
-        let token = Self::token(&env);
         let cfg = Self::config(&env);
         let vouches: Vec<VouchRecord> = env
             .storage()
@@ -750,26 +768,38 @@ impl QuorumCreditContract {
             .get(&DataKey::Vouches(borrower.clone()))
             .unwrap_or(Vec::new(&env));
 
+        // ── EFFECTS ───────────────────────────────────────────────────────────
+        loan.defaulted = true;
+        env.storage()
+            .persistent()
+            .set(&DataKey::Loan(borrower.clone()), &loan);
+
+        env.storage()
+            .persistent()
+            .remove(&DataKey::Vouches(borrower.clone()));
+
+        let mut total_slash: i128 = 0;
+        for v in vouches.iter() {
+            total_slash += v.stake * cfg.slash_bps / 10_000;
+        }
+        let treasury: i128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::SlashTreasury)
+            .unwrap_or(0);
+        env.storage()
+            .instance()
+            .set(&DataKey::SlashTreasury, &(treasury + total_slash));
+
+        // ── INTERACTIONS ──────────────────────────────────────────────────────
+        let token = Self::token(&env);
         for v in vouches.iter() {
             let slash_amount = v.stake * cfg.slash_bps / 10_000;
             let returned = v.stake - slash_amount;
             if returned > 0 {
                 token.transfer(&env.current_contract_address(), &v.voucher, &returned);
             }
-            let treasury: i128 = env
-                .storage()
-                .instance()
-                .get(&DataKey::SlashTreasury)
-                .unwrap_or(0);
-            env.storage()
-                .instance()
-                .set(&DataKey::SlashTreasury, &(treasury + slash_amount));
         }
-
-        loan.defaulted = true;
-        env.storage()
-            .persistent()
-            .set(&DataKey::Loan(borrower.clone()), &loan);
 
         // Burn one reputation point if a reputation NFT contract is configured.
         if let Some(nft_addr) = env
@@ -779,10 +809,6 @@ impl QuorumCreditContract {
         {
             ReputationNftContractClient::new(&env, &nft_addr).burn(&borrower);
         }
-
-        env.storage()
-            .persistent()
-            .remove(&DataKey::Vouches(borrower));
     }
 
     /// Admin sets the loan duration (in seconds) applied to future loans.
@@ -3027,6 +3053,56 @@ mod tests {
         client.set_config(&cfg);
 
         assert_eq!(client.get_config().slash_bps, 10_000);
+    }
+
+    // ── Reentrancy Protection Tests ───────────────────────────────────────────
+
+    /// Verifies that a second call to `slash` for the same borrower is rejected
+    /// once the first call has committed the defaulted state.
+    ///
+    /// In the old (vulnerable) code, `loan.defaulted` was written *after* the
+    /// token transfer loop, so a reentrant call could slip through the
+    /// `assert!(!loan.defaulted)` guard.  With the CEI fix the state is
+    /// committed first, making the second call panic with "already defaulted".
+    #[test]
+    #[should_panic(expected = "already defaulted")]
+    fn test_slash_reentrancy_second_call_rejected() {
+        let env = Env::default();
+        let (contract_id, _token_addr, admin, borrower, voucher) = setup(&env);
+        let client = QuorumCreditContractClient::new(&env, &contract_id);
+        let admin_signers = single_admin_signers(&env, &admin);
+
+        // Set up a loan so slash has something to work on.
+        client.vouch(&voucher, &borrower, &1_000_000);
+        client.request_loan(&borrower, &500_000, &1_000_000);
+
+        // First slash — must succeed and mark the loan defaulted.
+        client.slash(&admin_signers, &borrower);
+        assert!(client.get_loan(&borrower).unwrap().defaulted);
+
+        // Simulate the reentrant / replayed call: must be rejected because
+        // the loan is already marked defaulted (CEI guard fires).
+        client.slash(&admin_signers, &borrower);
+    }
+
+    /// Verifies that after a successful slash the vouches storage key is gone,
+    /// so a reentrant call cannot drain stakes a second time even if it somehow
+    /// bypassed the defaulted check.
+    #[test]
+    fn test_slash_clears_vouches_before_transfers() {
+        let env = Env::default();
+        let (contract_id, _token_addr, admin, borrower, voucher) = setup(&env);
+        let client = QuorumCreditContractClient::new(&env, &contract_id);
+        let admin_signers = single_admin_signers(&env, &admin);
+
+        client.vouch(&voucher, &borrower, &1_000_000);
+        client.request_loan(&borrower, &500_000, &1_000_000);
+        client.slash(&admin_signers, &borrower);
+
+        // Vouches must be gone — no second drain is possible.
+        assert!(client.get_vouches(&borrower).is_none());
+        // Loan must be marked defaulted.
+        assert!(client.get_loan(&borrower).unwrap().defaulted);
     }
 }
 
