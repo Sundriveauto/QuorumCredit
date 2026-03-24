@@ -23,6 +23,7 @@ pub enum ContractError {
     InsufficientFunds = 1,
     DuplicateVouch = 2,
     NoActiveLoan = 3,
+    ContractPaused = 4,
 }
 
 // ── Storage Keys ──────────────────────────────────────────────────────────────
@@ -35,6 +36,7 @@ pub enum DataKey {
     Token,            // XLM token contract address
     Deployer,         // Address that deployed the contract; guards initialize
     SlashTreasury,    // i128 accumulated slashed funds
+    Paused,           // bool: true when contract is paused
 }
 
 // ── Data Types ────────────────────────────────────────────────────────────────
@@ -92,6 +94,7 @@ impl QuorumCreditContract {
         stake: i128,
     ) -> Result<(), ContractError> {
         voucher.require_auth();
+        Self::require_not_paused(&env)?;
 
         assert!(voucher != borrower, "voucher cannot vouch for self");
 
@@ -133,6 +136,7 @@ impl QuorumCreditContract {
         threshold: i128,
     ) -> Result<(), ContractError> {
         borrower.require_auth();
+        Self::require_not_paused(&env)?;
 
         assert!(
             amount >= MIN_LOAN_AMOUNT,
@@ -188,6 +192,7 @@ impl QuorumCreditContract {
     /// Borrower repays loan; vouchers receive 2% yield on their stake.
     pub fn repay(env: Env, borrower: Address) -> Result<(), ContractError> {
         borrower.require_auth();
+        Self::require_not_paused(&env)?;
 
         let mut loan: LoanRecord = env
             .storage()
@@ -247,6 +252,7 @@ impl QuorumCreditContract {
             .get(&DataKey::Admin)
             .expect("not initialized");
         admin.require_auth();
+        Self::require_not_paused(&env).expect("contract is paused");
 
         let mut loan: LoanRecord = env
             .storage()
@@ -398,6 +404,30 @@ impl QuorumCreditContract {
         Self::token(&env).transfer(&env.current_contract_address(), &voucher, &stake);
     }
 
+    // ── Admin: Pause / Unpause ────────────────────────────────────────────────
+
+    /// Pause the contract, disabling vouch, request_loan, repay, and slash.
+    pub fn pause(env: Env) {
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("not initialized");
+        admin.require_auth();
+        env.storage().instance().set(&DataKey::Paused, &true);
+    }
+
+    /// Unpause the contract, re-enabling all critical functions.
+    pub fn unpause(env: Env) {
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("not initialized");
+        admin.require_auth();
+        env.storage().instance().set(&DataKey::Paused, &false);
+    }
+
     // ── Views ─────────────────────────────────────────────────────────────────
 
     pub fn get_slash_treasury(env: Env) -> i128 {
@@ -405,6 +435,13 @@ impl QuorumCreditContract {
             .instance()
             .get(&DataKey::SlashTreasury)
             .unwrap_or(0)
+    }
+
+    pub fn get_paused(env: Env) -> bool {
+        env.storage()
+            .instance()
+            .get(&DataKey::Paused)
+            .unwrap_or(false)
     }
 
     pub fn get_loan(env: Env, borrower: Address) -> Option<LoanRecord> {
@@ -416,6 +453,19 @@ impl QuorumCreditContract {
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
+
+    fn require_not_paused(env: &Env) -> Result<(), ContractError> {
+        let paused: bool = env
+            .storage()
+            .instance()
+            .get(&DataKey::Paused)
+            .unwrap_or(false);
+        if paused {
+            Err(ContractError::ContractPaused)
+        } else {
+            Ok(())
+        }
+    }
 
     fn token(env: &Env) -> token::Client<'_> {
         let addr: Address = env
@@ -710,5 +760,81 @@ mod tests {
 
         assert_eq!(token.balance(&treasury_recipient), 500_000);
         assert_eq!(client.get_slash_treasury(), 0);
+    }
+
+    // ── Pause / Unpause Tests ─────────────────────────────────────────────────
+
+    #[test]
+    fn test_pause_blocks_vouch() {
+        let env = Env::default();
+        let (contract_id, _token_addr, admin, borrower, voucher) = setup(&env);
+        let client = QuorumCreditContractClient::new(&env, &contract_id);
+
+        client.pause();
+        assert!(client.get_paused());
+
+        let result = client.try_vouch(&voucher, &borrower, &1_000_000);
+        assert_eq!(result, Err(Ok(ContractError::ContractPaused)));
+    }
+
+    #[test]
+    fn test_pause_blocks_request_loan() {
+        let env = Env::default();
+        let (contract_id, _token_addr, _admin, borrower, voucher) = setup(&env);
+        let client = QuorumCreditContractClient::new(&env, &contract_id);
+
+        // Vouch before pausing so stake is in place.
+        client.vouch(&voucher, &borrower, &1_000_000);
+        client.pause();
+
+        let result = client.try_request_loan(&borrower, &500_000, &1_000_000);
+        assert_eq!(result, Err(Ok(ContractError::ContractPaused)));
+    }
+
+    #[test]
+    fn test_pause_blocks_repay() {
+        let env = Env::default();
+        let (contract_id, _token_addr, _admin, borrower, voucher) = setup(&env);
+        let client = QuorumCreditContractClient::new(&env, &contract_id);
+
+        client.vouch(&voucher, &borrower, &1_000_000);
+        client.request_loan(&borrower, &500_000, &1_000_000);
+        client.pause();
+
+        let result = client.try_repay(&borrower);
+        assert_eq!(result, Err(Ok(ContractError::ContractPaused)));
+    }
+
+    #[test]
+    fn test_pause_blocks_slash() {
+        let env = Env::default();
+        let (contract_id, _token_addr, _admin, borrower, voucher) = setup(&env);
+        let client = QuorumCreditContractClient::new(&env, &contract_id);
+
+        client.vouch(&voucher, &borrower, &1_000_000);
+        client.request_loan(&borrower, &500_000, &1_000_000);
+        client.pause();
+
+        // slash panics on ContractPaused since it's not a Result-returning fn.
+        let result = client.try_slash(&borrower);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_unpause_restores_operations() {
+        let env = Env::default();
+        let (contract_id, _token_addr, _admin, borrower, voucher) = setup(&env);
+        let client = QuorumCreditContractClient::new(&env, &contract_id);
+
+        client.pause();
+        assert!(client.get_paused());
+
+        client.unpause();
+        assert!(!client.get_paused());
+
+        // vouch should succeed after unpause.
+        client.vouch(&voucher, &borrower, &1_000_000);
+        let vouches = client.get_vouches(&borrower).unwrap();
+        assert_eq!(vouches.len(), 1);
     }
 }
