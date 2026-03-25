@@ -896,6 +896,26 @@ impl QuorumCreditContract {
             .unwrap_or(0)
     }
 
+    /// Admin sets the maximum loan-to-stake ratio (as a percentage, e.g. 150 = 150%).
+    /// A value of 0 is rejected; use set_config to disable the ratio check entirely
+    /// by setting max_loan_to_stake_ratio to a very large number.
+    pub fn set_max_loan_to_stake_ratio(
+        env: Env,
+        admin_signers: Vec<Address>,
+        ratio: u32,
+    ) {
+        Self::require_admin_approval(&env, &admin_signers);
+        assert!(ratio > 0, "max_loan_to_stake_ratio must be greater than zero");
+        let mut cfg = Self::config(&env);
+        cfg.max_loan_to_stake_ratio = ratio;
+        env.storage().instance().set(&DataKey::Config, &cfg);
+    }
+
+    /// Returns the current maximum loan-to-stake ratio (percentage).
+    pub fn get_max_loan_to_stake_ratio(env: Env) -> u32 {
+        Self::config(&env).max_loan_to_stake_ratio
+    }
+
     /// Admin updates configurable protocol parameters.
     pub fn set_config(env: Env, admin_signers: Vec<Address>, config: Config) {
         Self::require_admin_approval(&env, &admin_signers);
@@ -2847,5 +2867,123 @@ mod tests {
         // voucher_b has never vouched — must succeed immediately despite voucher_a's cooldown
         client.vouch(&voucher_b, &borrower, &1_000_000);
         assert!(client.vouch_exists(&voucher_b, &borrower));
+    }
+
+    // ── Max Loan-to-Stake Ratio Tests ─────────────────────────────────────────
+
+    #[test]
+    fn test_max_loan_to_stake_ratio_default_is_150() {
+        let env = Env::default();
+        let (contract_id, _, _, _, _) = setup(&env);
+        let client = QuorumCreditContractClient::new(&env, &contract_id);
+        assert_eq!(client.get_max_loan_to_stake_ratio(), DEFAULT_MAX_LOAN_TO_STAKE_RATIO);
+    }
+
+    #[test]
+    fn test_set_max_loan_to_stake_ratio_updates_config() {
+        let env = Env::default();
+        let (contract_id, _, admin, _, _) = setup(&env);
+        let client = QuorumCreditContractClient::new(&env, &contract_id);
+        let admin_signers = single_admin_signers(&env, &admin);
+
+        client.set_max_loan_to_stake_ratio(&admin_signers, &100);
+        assert_eq!(client.get_max_loan_to_stake_ratio(), 100);
+    }
+
+    #[test]
+    #[should_panic(expected = "max_loan_to_stake_ratio must be greater than zero")]
+    fn test_set_max_loan_to_stake_ratio_zero_rejected() {
+        let env = Env::default();
+        let (contract_id, _, admin, _, _) = setup(&env);
+        let client = QuorumCreditContractClient::new(&env, &contract_id);
+        let admin_signers = single_admin_signers(&env, &admin);
+        client.set_max_loan_to_stake_ratio(&admin_signers, &0);
+    }
+
+    #[test]
+    fn test_request_loan_at_exact_ratio_limit_succeeds() {
+        let env = Env::default();
+        let (contract_id, _, admin, borrower, voucher) = setup(&env);
+        let client = QuorumCreditContractClient::new(&env, &contract_id);
+        let admin_signers = single_admin_signers(&env, &admin);
+
+        // Set ratio to 100%: loan cannot exceed total stake
+        client.set_max_loan_to_stake_ratio(&admin_signers, &100);
+
+        client.vouch(&voucher, &borrower, &1_000_000);
+        // Exactly 100% of 1_000_000 = 1_000_000 — should succeed
+        client.request_loan(&borrower, &Vec::new(&env), &1_000_000, &1_000_000);
+        assert_eq!(client.get_loan(&borrower).unwrap().amount, 1_000_000);
+    }
+
+    #[test]
+    #[should_panic(expected = "loan amount exceeds maximum collateral ratio")]
+    fn test_request_loan_exceeds_ratio_rejected() {
+        let env = Env::default();
+        let (contract_id, _, admin, borrower, voucher) = setup(&env);
+        let client = QuorumCreditContractClient::new(&env, &contract_id);
+        let admin_signers = single_admin_signers(&env, &admin);
+
+        // Set ratio to 50%: max loan = 500_000 for 1_000_000 stake
+        client.set_max_loan_to_stake_ratio(&admin_signers, &50);
+
+        client.vouch(&voucher, &borrower, &1_000_000);
+        // 600_000 > 50% of 1_000_000 — must be rejected
+        client.request_loan(&borrower, &Vec::new(&env), &600_000, &1_000_000);
+    }
+
+    #[test]
+    fn test_request_loan_below_ratio_limit_succeeds() {
+        let env = Env::default();
+        let (contract_id, _, admin, borrower, voucher) = setup(&env);
+        let client = QuorumCreditContractClient::new(&env, &contract_id);
+        let admin_signers = single_admin_signers(&env, &admin);
+
+        client.set_max_loan_to_stake_ratio(&admin_signers, &50);
+
+        client.vouch(&voucher, &borrower, &1_000_000);
+        // 500_000 == 50% of 1_000_000 — exactly at limit, should succeed
+        client.request_loan(&borrower, &Vec::new(&env), &500_000, &1_000_000);
+        assert_eq!(client.get_loan(&borrower).unwrap().amount, 500_000);
+    }
+
+    #[test]
+    fn test_increasing_ratio_allows_larger_loan() {
+        let env = Env::default();
+        let (contract_id, _, admin, borrower, voucher) = setup(&env);
+        let client = QuorumCreditContractClient::new(&env, &contract_id);
+        let admin_signers = single_admin_signers(&env, &admin);
+
+        // Start at 50%, repay, then raise to 200% and take a bigger loan
+        client.set_max_loan_to_stake_ratio(&admin_signers, &50);
+        client.vouch(&voucher, &borrower, &1_000_000);
+        client.request_loan(&borrower, &Vec::new(&env), &500_000, &1_000_000);
+        client.repay(&borrower, &500_000);
+
+        client.set_max_loan_to_stake_ratio(&admin_signers, &200);
+        // 2_000_000 == 200% of 1_000_000 — should now succeed
+        client.request_loan(&borrower, &Vec::new(&env), &2_000_000, &1_000_000);
+        assert_eq!(client.get_loan(&borrower).unwrap().amount, 2_000_000);
+    }
+
+    #[test]
+    fn test_ratio_enforced_with_multiple_vouchers() {
+        let env = Env::default();
+        let (contract_id, token_addr, admin, borrower, voucher) = setup(&env);
+        let client = QuorumCreditContractClient::new(&env, &contract_id);
+        let token_admin = StellarAssetClient::new(&env, &token_addr);
+        let admin_signers = single_admin_signers(&env, &admin);
+
+        // Set ratio to 100%
+        client.set_max_loan_to_stake_ratio(&admin_signers, &100);
+
+        let voucher2 = Address::generate(&env);
+        token_admin.mint(&voucher2, &10_000_000);
+
+        client.vouch(&voucher, &borrower, &1_000_000);
+        client.vouch(&voucher2, &borrower, &1_000_000);
+        // total_stake = 2_000_000; 100% = 2_000_000 max
+        client.request_loan(&borrower, &Vec::new(&env), &2_000_000, &2_000_000);
+        assert_eq!(client.get_loan(&borrower).unwrap().amount, 2_000_000);
     }
 }
