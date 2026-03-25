@@ -54,14 +54,7 @@ pub enum DataKey {
     Paused,              // bool: true when contract is paused
     LoanDuration,        // u64 configurable loan duration in seconds
     ReputationNft,       // Address of the ReputationNftContract
-    Loan(Address),    // borrower → LoanRecord
-    Vouches(Address), // borrower → Vec<VouchRecord>
-    Admin,            // Address allowed to call slash
-    Token,            // XLM token contract address
-    Deployer,         // Address that deployed the contract; guards initialize
-    SlashTreasury,    // i128 accumulated slashed funds
-    Paused,           // bool: true when contract is paused
-    Config,           // Config struct: all configurable protocol parameters
+    Config,              // Config struct: all configurable protocol parameters
 }
 
 // ── Config ────────────────────────────────────────────────────────────────────
@@ -361,6 +354,11 @@ impl QuorumCreditContract {
         env.storage()
             .persistent()
             .set(&DataKey::Loan(borrower.clone()), &loan);
+
+        env.events().publish(
+            (symbol_short!("loan"), symbol_short!("repaid")),
+            (borrower.clone(), loan.amount),
+        );
 
         // Mint one reputation point if a reputation NFT contract is configured.
         if let Some(nft_addr) = env
@@ -858,7 +856,7 @@ mod tests {
         token_admin.mint(&contract_id, &50_000_000);
 
         let client = QuorumCreditContractClient::new(&env, &contract_id);
-        client.initialize(&admin, &admin, &token_id.address(), &150);
+        client.initialize(&admin, &admin, &token_id.address());
 
         client.vouch(&voucher, &borrower, &1_000_000);
         client.request_loan(&borrower, &500_000, &1_000_000);
@@ -905,6 +903,38 @@ mod tests {
         client.repay(&borrower);
 
         assert_eq!(token.balance(&voucher), 10_020_000);
+    }
+
+    #[test]
+    fn test_repay_emits_event() {
+        use soroban_sdk::{IntoVal, Val};
+
+        let env = Env::default();
+        env.ledger().set_timestamp(1_000_000);
+        let (contract_id, _token_addr, _admin, borrower, voucher) = setup(&env);
+        let client = QuorumCreditContractClient::new(&env, &contract_id);
+
+        client.vouch(&voucher, &borrower, &1_000_000);
+        client.request_loan(&borrower, &500_000, &1_000_000);
+        client.repay(&borrower);
+
+        let topic_loan: Val = symbol_short!("loan").into_val(&env);
+        let topic_repaid: Val = symbol_short!("repaid").into_val(&env);
+
+        let (_, _, data) = env
+            .events()
+            .all()
+            .iter()
+            .find(|(_, topics, _)| {
+                topics.len() == 2
+                    && topics.get_unchecked(0).get_payload() == topic_loan.get_payload()
+                    && topics.get_unchecked(1).get_payload() == topic_repaid.get_payload()
+            })
+            .expect("loan_repaid event not emitted");
+
+        let (event_borrower, event_amount): (Address, i128) = data.into_val(&env);
+        assert_eq!(event_borrower, borrower);
+        assert_eq!(event_amount, 500_000);
     }
 
     #[test]
@@ -1527,6 +1557,13 @@ mod tests {
         let client = QuorumCreditContractClient::new(&env, &contract_id);
 
         // Default immediately with score = 0 — should not underflow.
+        client.vouch(&voucher, &borrower, &1_000_000);
+        client.request_loan(&borrower, &500_000, &1_000_000);
+        client.slash(&borrower);
+
+        assert_eq!(client.get_reputation(&borrower), 0);
+    }
+
     // ── Config Tests ──────────────────────────────────────────────────────────
 
     #[test]
@@ -1605,7 +1642,8 @@ mod tests {
         client.request_loan(&borrower, &500_000, &1_000_000);
         client.slash(&borrower);
 
-        assert_eq!(client.get_reputation(&borrower), 0);
+        // voucher started with 10_000_000, staked 1_000_000, gets back 750_000
+        assert_eq!(token.balance(&voucher), 9_750_000);
     }
 
     #[test]
@@ -1616,7 +1654,5 @@ mod tests {
 
         // No NFT contract configured — should return 0 gracefully.
         assert_eq!(client.get_reputation(&borrower), 0);
-        // voucher started with 10_000_000, staked 1_000_000, gets back 750_000
-        assert_eq!(token.balance(&voucher), 9_750_000);
     }
 }
