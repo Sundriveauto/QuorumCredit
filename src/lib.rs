@@ -29,6 +29,7 @@ const DEFAULT_MAX_VOUCHERS: u32 = 100;
 const DEFAULT_MIN_LOAN_AMOUNT: i128 = 100_000;
 const DEFAULT_LOAN_DURATION: u64 = 30 * 24 * 60 * 60;
 const DEFAULT_MAX_LOAN_TO_STAKE_RATIO: u32 = 150;
+const DEFAULT_SLASH_CHALLENGE_WINDOW: u64 = 7 * 24 * 60 * 60;
 
 // ── Errors ────────────────────────────────────────────────────────────────────
 
@@ -48,6 +49,11 @@ pub enum ContractError {
     LoanExceedsMaxAmount = 11,
     InsufficientVouchers = 12,
     UnauthorizedCaller = 13,
+    SlashAlreadyChallenged = 14
+    NoPendingSlash = 15
+    ChallengeWindowExpired = 16
+    ChallengeWindowActive = 17
+    SlashAlreadyFinalized = 18
 }
 
 // ── Loan Status ───────────────────────────────────────────────────────────────
@@ -112,6 +118,7 @@ pub struct Config {
     /// At the default 200 bps yield rate, the minimum is 50 stroops
     /// (50 * 200 / 10_000 = 1 stroop of yield).
     pub min_yield_stake: i128,
+    pub slash_challenge_window: u64,
 }
 
 impl Config {
@@ -124,6 +131,7 @@ impl Config {
             loan_duration: DEFAULT_LOAN_DURATION,
             max_loan_to_stake_ratio: DEFAULT_MAX_LOAN_TO_STAKE_RATIO,
             min_yield_stake: DEFAULT_MIN_YIELD_STAKE,
+            slash_challenge_window: DEFAULT_SLASH_CHALLENGE_WINDOW,
         }
     }
 }
@@ -160,6 +168,25 @@ pub struct LoanPoolRecord {
     pub amounts: Vec<i128>,
     pub created_at: u64,
     pub total_disbursed: i128,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ChallengeStatus {
+    Pending,       
+    Challenged,
+    Resolved,
+    Finalized,
+}
+
+#[contracttype]
+#[derive(Clone)]
+pub struct SlashChallengeRecord {
+    pub borrower: Address,
+    pub initiated_at: u64,
+    pub challenge_deadline: u64,
+    pub status: ChallengeStatus,
+    pub reason: soroban_sdk::Symbol,
 }
 
 // ── Contract ──────────────────────────────────────────────────────────────────
@@ -930,6 +957,7 @@ impl QuorumCreditContract {
             config.max_loan_to_stake_ratio > 0,
             "max_loan_to_stake_ratio must be greater than zero"
         );
+        assert!(config.slash_challenge_window > 0, "challenge window must be positive");
         Self::validate_admin_config(&config.admins, config.admin_threshold);
         env.storage().instance().set(&DataKey::Config, &config);
     }
