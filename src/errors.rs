@@ -41,4 +41,5 @@ pub enum ContractError {
     AlreadyVoted = 31,
     SlashVoteNotFound = 32,
     SlashAlreadyExecuted = 33,
+    MaxVouchersPerBorrowerExceeded = 35,
 }

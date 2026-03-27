@@ -39,6 +39,8 @@ mod duplicate_loan_test;
 mod slash_multi_voucher_test;
 #[cfg(test)]
 mod paused_state_test;
+#[cfg(test)]
+mod max_vouchers_per_borrower_test;
 
 pub use errors::ContractError;
 pub use types::*;
@@ -285,6 +287,10 @@ impl QuorumCreditContract {
         admin::set_max_loan_to_stake_ratio(env, admin_signers, ratio)
     }
 
+    pub fn set_max_vouchers_per_borrower(env: Env, admin_signers: Vec<Address>, max_vouchers: u32) {
+        admin::set_max_vouchers_per_borrower(env, admin_signers, max_vouchers)
+    }
+
     pub fn add_allowed_token(env: Env, admin_signers: Vec<Address>, token: Address) {
         admin::add_allowed_token(env, admin_signers, token)
     }
@@ -435,6 +441,10 @@ impl QuorumCreditContract {
 
     pub fn get_max_loan_to_stake_ratio(env: Env) -> u32 {
         admin::get_max_loan_to_stake_ratio(env)
+    }
+
+    pub fn get_max_vouchers_per_borrower(env: Env) -> u32 {
+        admin::get_max_vouchers_per_borrower(env)
     }
 
     pub fn get_config(env: Env) -> Config {

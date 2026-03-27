@@ -72,6 +72,17 @@ fn do_vouch(
         }
     }
 
+    // Enforce max vouchers per borrower limit to prevent storage bloat.
+    let max_vouchers_per_borrower: u32 = env
+        .storage()
+        .instance()
+        .get(&DataKey::MaxVouchersPerBorrower)
+        .unwrap_or(crate::types::DEFAULT_MAX_VOUCHERS_PER_BORROWER);
+    
+    if vouches.len() >= max_vouchers_per_borrower {
+        return Err(ContractError::MaxVouchersPerBorrowerExceeded);
+    }
+
     // Reject vouch if the borrower already has an active loan — the stake
     // would be locked with no effect on the existing loan (fixes issue #13).
     if has_active_loan(env, &borrower) {
