@@ -24,6 +24,7 @@ mod multi_asset_test;
 #[cfg(test)]
 mod referral_test;
 #[cfg(test)]
+mod vouch_zero_stake_test;
 mod security_fixes_test;
 #[cfg(test)]
 mod bug_condition_test;
@@ -51,6 +52,12 @@ impl QuorumCreditContract {
     ) -> Result<(), ContractError> {
         deployer.require_auth();
 
+        if env.storage().instance().has(&DataKey::Config) {
+            panic_with_error!(&env, ContractError::AlreadyInitialized);
+        }
+
+        validate_admin_config(&env, &admins, admin_threshold).expect("invalid admin config");
+        require_valid_token(&env, &token).expect("invalid token");
         assert!(
             !env.storage().instance().has(&DataKey::Config),
             "already initialized"
