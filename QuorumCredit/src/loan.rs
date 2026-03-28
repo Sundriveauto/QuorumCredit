@@ -104,7 +104,7 @@ pub fn request_loan(
     let mut total_stake: i128 = 0;
     for v in token_vouches.iter() {
         total_stake = total_stake
-            .checked_add(v.stake)
+            .checked_add(v.amount)
             .ok_or(ContractError::StakeOverflow)?;
     }
     if total_stake < threshold {
@@ -140,7 +140,7 @@ pub fn request_loan(
 
     let deadline = now + cfg.loan_duration;
     let loan_id = next_loan_id(&env);
-    let total_yield = amount * cfg.yield_bps / 10_000;
+    let total_yield = bps_of(amount, cfg.yield_bps);
 
     env.storage().persistent().set(
         &DataKey::Loan(loan_id),
@@ -216,13 +216,7 @@ pub fn repay(env: Env, borrower: Address, payment: i128) -> Result<(), ContractE
     if borrower != loan.borrower {
         return Err(ContractError::UnauthorizedCaller);
     }
-    if loan.status != LoanStatus::Active {
-        if loan.status == LoanStatus::Repaid {
-            panic!("loan already repaid");
-        } else {
-            return Err(ContractError::NoActiveLoan);
-        }
-    }
+    validate_loan_active(&loan)?;
     assert!(
         env.ledger().timestamp() <= loan.deadline,
         "loan deadline has passed"
@@ -249,6 +243,10 @@ pub fn repay(env: Env, borrower: Address, payment: i128) -> Result<(), ContractE
             .get(&DataKey::Vouches(borrower.clone()))
             .unwrap_or(Vec::new(&env));
         
+        if vouches.is_empty() {
+            panic!("no vouchers found for borrower");
+        }
+
         // Issue 112: Only distribute yield to vouches in the same token as the loan.
         // Verify that available funds exclude slash balance to prevent fund leakage.
         let loan_token = soroban_sdk::token::Client::new(&env, &loan.token_address);
@@ -257,7 +255,7 @@ pub fn repay(env: Env, borrower: Address, payment: i128) -> Result<(), ContractE
         let mut total_stake: i128 = 0;
         for v in vouches.iter() {
             if v.token == loan.token_address {
-                total_stake += v.stake;
+                total_stake += v.amount;
             }
         }
 
@@ -270,7 +268,7 @@ pub fn repay(env: Env, borrower: Address, payment: i128) -> Result<(), ContractE
                 continue;
             }
             let voucher_yield = if total_stake > 0 {
-                (available_for_yield * v.stake) / total_stake
+                (available_for_yield * v.amount) / total_stake
             } else {
                 0
             };
@@ -285,7 +283,7 @@ pub fn repay(env: Env, borrower: Address, payment: i128) -> Result<(), ContractE
             loan_token.transfer(
                 &env.current_contract_address(),
                 &v.voucher,
-                &(v.stake + voucher_yield),
+                &(v.amount + voucher_yield),
             );
         }
 
@@ -386,7 +384,7 @@ pub fn is_eligible(env: Env, borrower: Address, threshold: i128) -> bool {
         .get(&DataKey::Vouches(borrower))
         .unwrap_or(Vec::new(&env));
 
-    let total_stake: i128 = vouches.iter().map(|v| v.stake).sum();
+    let total_stake: i128 = vouches.iter().map(|v| v.amount).sum();
     total_stake >= threshold
 }
 

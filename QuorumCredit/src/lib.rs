@@ -27,6 +27,7 @@ mod referral_test;
 mod request_loan_insufficient_stake_test;
 #[cfg(test)]
 mod vouch_zero_stake_test;
+#[cfg(test)]
 mod security_fixes_test;
 #[cfg(test)]
 mod bug_condition_test;
@@ -198,7 +199,7 @@ impl QuorumCreditContract {
         loan::repay(env, borrower, payment)
     }
 
-    // ── Admin ─────────────────────────────────────────────────────────────────
+    // ── Admin Functions (require admin_threshold signatures) ──────────────────
 
     pub fn add_admin(env: Env, admin_signers: Vec<Address>, new_admin: Address) {
         admin::add_admin(env, admin_signers, new_admin)
