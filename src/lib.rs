@@ -63,7 +63,7 @@ mod repay_protocol_fee_test;
 #[cfg(test)]
 mod is_eligible_token_filter_test;
 #[cfg(test)]
-mod add_allowed_token_sep41_test;
+mod vote_slash_auto_execute_test;
 
 pub use errors::ContractError;
 pub use types::*;
@@ -89,13 +89,6 @@ impl QuorumCreditContract {
         if env.storage().instance().has(&DataKey::Config) {
             panic_with_error!(&env, ContractError::AlreadyInitialized);
         }
-
-        validate_admin_config(&env, &admins, admin_threshold).expect("invalid admin config");
-        require_valid_token(&env, &token).expect("invalid token");
-        assert!(
-            !env.storage().instance().has(&DataKey::Config),
-            "already initialized"
-        );
 
         validate_admin_config(&env, &admins, admin_threshold)?;
         require_valid_token(&env, &token)?;
@@ -132,7 +125,8 @@ impl QuorumCreditContract {
     /// # Arguments
     /// * `voucher` - Address of the voucher staking tokens
     /// * `borrower` - Address of the borrower being vouched for
-    /// * `stake` - Amount of tokens to stake (must be positive)
+    /// * `stake` - Amount of tokens to stake, in stroops (must be positive).
+    ///   1 XLM = 10,000,000 stroops.
     /// * `token` - Address of the token contract to stake
     ///
     /// # Panics
@@ -158,7 +152,8 @@ impl QuorumCreditContract {
     /// # Arguments
     /// * `voucher` - Address of the voucher staking tokens
     /// * `borrowers` - Vector of borrower addresses
-    /// * `stakes` - Vector of stake amounts (must match borrowers length)
+    /// * `stakes` - Vector of stake amounts, in stroops (must match borrowers length).
+    ///   1 XLM = 10,000,000 stroops.
     /// * `token` - Address of the token contract to stake
     ///
     /// # Panics
@@ -180,7 +175,8 @@ impl QuorumCreditContract {
     /// # Arguments
     /// * `voucher` - Address of the voucher
     /// * `borrower` - Address of the borrower
-    /// * `additional` - Additional amount to stake (must be positive)
+    /// * `additional` - Additional amount to stake, in stroops (must be positive).
+    ///   1 XLM = 10,000,000 stroops.
     ///
     /// # Panics
     /// * If vouch does not exist
@@ -200,7 +196,8 @@ impl QuorumCreditContract {
     /// # Arguments
     /// * `voucher` - Address of the voucher
     /// * `borrower` - Address of the borrower
-    /// * `amount` - Amount to decrease (must be positive and not exceed current stake)
+    /// * `amount` - Amount to decrease, in stroops (must be positive and not exceed current stake).
+    ///   1 XLM = 10,000,000 stroops.
     ///
     /// # Panics
     /// * If vouch does not exist
@@ -297,7 +294,9 @@ impl QuorumCreditContract {
     /// * If bonus_bps exceeds 10000
     pub fn set_referral_bonus_bps(env: Env, admin_signers: Vec<Address>, bonus_bps: u32) {
         helpers::require_admin_approval(&env, &admin_signers);
-        assert!(bonus_bps <= 10_000, "bonus_bps must not exceed 10000");
+        if bonus_bps > 10_000 {
+            panic_with_error!(&env, ContractError::InvalidAmount);
+        }
         env.storage()
             .instance()
             .set(&DataKey::ReferralBonusBps, &bonus_bps);
@@ -318,8 +317,10 @@ impl QuorumCreditContract {
     ///
     /// # Arguments
     /// * `borrower` - Address of the borrower
-    /// * `amount` - Loan amount in stroops
-    /// * `threshold` - Minimum total stake required from vouchers
+    /// * `amount` - Loan amount, in stroops (must be ≥ `min_loan_amount` and ≤ `max_loan_amount`).
+    ///   1 XLM = 10,000,000 stroops.
+    /// * `threshold` - Minimum total stake required from vouchers, in stroops.
+    ///   1 XLM = 10,000,000 stroops.
     /// * `loan_purpose` - Description of the loan purpose
     /// * `token` - Address of the token contract for the loan
     ///
@@ -351,7 +352,8 @@ impl QuorumCreditContract {
     ///
     /// # Arguments
     /// * `borrower` - Address of the borrower
-    /// * `payment` - Payment amount in stroops (must be positive and not exceed outstanding balance)
+    /// * `payment` - Payment amount, in stroops (must be positive and not exceed outstanding balance).
+    ///   1 XLM = 10,000,000 stroops.
     ///
     /// # Panics
     /// * If borrower does not have an active loan
@@ -557,7 +559,8 @@ impl QuorumCreditContract {
     ///
     /// # Arguments
     /// * `admin_signers` - Vector of admin addresses (must meet threshold)
-    /// * `amount` - Minimum stake amount in stroops
+    /// * `amount` - Minimum stake amount, in stroops (0 = no minimum).
+    ///   1 XLM = 10,000,000 stroops.
     ///
     /// # Panics
     /// * If admin approval is insufficient
@@ -569,7 +572,8 @@ impl QuorumCreditContract {
     ///
     /// # Arguments
     /// * `admin_signers` - Vector of admin addresses (must meet threshold)
-    /// * `amount` - Maximum loan amount in stroops (0 = no cap)
+    /// * `amount` - Maximum loan amount, in stroops (0 = no cap).
+    ///   1 XLM = 10,000,000 stroops.
     ///
     /// # Panics
     /// * If admin approval is insufficient
@@ -799,7 +803,8 @@ impl QuorumCreditContract {
     ///
     /// # Arguments
     /// * `borrower` - Address of the borrower
-    /// * `threshold` - Minimum total stake required
+    /// * `threshold` - Minimum total stake required, in stroops.
+    ///   1 XLM = 10,000,000 stroops.
     /// * `token_addr` - Token address to filter vouches by
     ///
     /// # Returns
