@@ -192,13 +192,14 @@ pub fn repay(env: Env, borrower: Address, payment: i128) -> Result<(), ContractE
 
     let mut loan = get_active_loan_record(&env, &borrower)?;
 
+    if borrower != loan.borrower {
+        return Err(ContractError::UnauthorizedCaller);
+    }
+
     for cb in loan.co_borrowers.iter() {
         cb.require_auth();
     }
 
-    if borrower != loan.borrower {
-        return Err(ContractError::UnauthorizedCaller);
-    }
     if loan.status != LoanStatus::Active {
         return Err(ContractError::NoActiveLoan);
     }
@@ -238,7 +239,7 @@ pub fn repay(env: Env, borrower: Address, payment: i128) -> Result<(), ContractE
             .get(&DataKey::ProtocolFeeBps)
             .unwrap_or(0);
         let protocol_fee = crate::helpers::bps_of(loan.amount, protocol_fee_bps);
-        
+
         if protocol_fee > 0 {
             if let Some(fee_treasury) = env
                 .storage()
