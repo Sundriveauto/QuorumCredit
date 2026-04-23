@@ -198,6 +198,9 @@ pub fn set_config(env: Env, admin_signers: Vec<Address>, config: Config) {
     if config.loan_duration == 0 {
         panic_with_error!(&env, ContractError::InvalidAmount);
     }
+    if config.grace_period > config.loan_duration {
+        panic_with_error!(&env, ContractError::InvalidAmount);
+    }
     if config.max_loan_to_stake_ratio == 0 {
         panic_with_error!(&env, ContractError::InvalidAmount);
     }
@@ -322,6 +325,17 @@ pub fn set_max_loan_to_stake_ratio(env: Env, admin_signers: Vec<Address>, ratio:
     }
     let mut cfg = config(&env);
     cfg.max_loan_to_stake_ratio = ratio;
+    env.storage().instance().set(&DataKey::Config, &cfg);
+}
+
+pub fn set_grace_period(env: Env, admin_signers: Vec<Address>, period: u64) {
+    require_admin_approval(&env, &admin_signers);
+    let cfg = config(&env);
+    if period > cfg.loan_duration {
+        panic_with_error!(&env, ContractError::InvalidAmount);
+    }
+    let mut cfg = cfg;
+    cfg.grace_period = period;
     env.storage().instance().set(&DataKey::Config, &cfg);
 }
 
