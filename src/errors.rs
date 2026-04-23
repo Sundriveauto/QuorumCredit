@@ -46,4 +46,6 @@ pub enum ContractError {
     InsufficientVoucherBalance = 36,
     /// Voucher and borrower must be different addresses.
     SelfVouchNotAllowed = 37,
+    /// A basis-point value is outside the valid range 0–10,000.
+    InvalidBps = 38,
 }

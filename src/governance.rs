@@ -119,8 +119,8 @@ pub fn get_slash_vote(env: Env, borrower: Address) -> Option<SlashVoteRecord> {
 /// Set the quorum threshold (in basis points) required to auto-execute a slash.
 /// Requires admin approval — called from admin module.
 pub fn set_slash_vote_quorum(env: &Env, quorum_bps: u32) {
-    if quorum_bps == 0 || quorum_bps > 10_000 {
-        panic_with_error!(env, ContractError::InvalidAmount);
+    if quorum_bps > 10_000 {
+        panic_with_error!(env, ContractError::InvalidBps);
     }
     env.storage()
         .instance()
