@@ -40,7 +40,9 @@ pub enum ContractError {
     AlreadyVoted = 31,
     SlashVoteNotFound = 32,
     SlashAlreadyExecuted = 33,
-    AlreadyRepaid = 34,
+    QuorumNotMet = 34,
+    AlreadyRepaid = 35,
     /// Voucher and borrower must be different addresses.
-    SelfVouchNotAllowed = 37,
+    SelfVouchNotAllowed = 38,
+    DuplicateToken = 39,
 }
