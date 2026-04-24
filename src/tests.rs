@@ -30,6 +30,8 @@ mod min_loan_amount_test;
 mod multi_asset_test;
 #[path = "partial_repay_test.rs"]
 mod partial_repay_test;
+#[path = "repay_overpayment_test.rs"]
+mod repay_overpayment_test;
 #[path = "paused_state_test.rs"]
 mod paused_state_test;
 #[path = "referral_test.rs"]

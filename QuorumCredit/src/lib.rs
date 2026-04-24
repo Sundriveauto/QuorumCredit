@@ -42,6 +42,8 @@ mod multi_asset_test;
 #[cfg(test)]
 mod referral_test;
 #[cfg(test)]
+mod repay_overpayment_test;
+#[cfg(test)]
 mod request_loan_insufficient_stake_test;
 #[cfg(test)]
 mod security_fixes_test;
