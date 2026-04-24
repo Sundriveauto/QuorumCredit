@@ -1015,4 +1015,12 @@ impl QuorumCreditContract {
     pub fn emit_repayment_reminders(env: Env) {
         loan::emit_repayment_reminders(env)
     }
+
+    /// Mint a reputation NFT for a borrower who has repaid at least one loan.
+    ///
+    /// # Errors
+    /// * `NoActiveLoan` — borrower has no successful repayments or no NFT contract configured
+    pub fn mint_reputation_nft(env: Env, borrower: Address) -> Result<(), ContractError> {
+        loan::mint_reputation_nft(env, borrower)
+    }
 }

@@ -461,3 +461,37 @@ pub fn emit_repayment_reminders(env: Env) {
         }
     }
 }
+
+/// Mint a reputation NFT for a borrower who has successfully repaid at least one loan.
+///
+/// # Errors
+/// * `NoActiveLoan` — borrower has never repaid a loan (repayment_count == 0)
+/// * `NoActiveLoan` — no reputation NFT contract is configured
+pub fn mint_reputation_nft(env: Env, borrower: Address) -> Result<(), ContractError> {
+    borrower.require_auth();
+
+    let repaid: u32 = env
+        .storage()
+        .persistent()
+        .get(&DataKey::RepaymentCount(borrower.clone()))
+        .unwrap_or(0);
+
+    if repaid == 0 {
+        return Err(ContractError::NoActiveLoan);
+    }
+
+    let nft_addr: Address = env
+        .storage()
+        .instance()
+        .get(&DataKey::ReputationNft)
+        .ok_or(ContractError::NoActiveLoan)?;
+
+    ReputationNftExternalClient::new(&env, &nft_addr).mint(&borrower);
+
+    env.events().publish(
+        (symbol_short!("rep"), symbol_short!("minted")),
+        borrower,
+    );
+
+    Ok(())
+}

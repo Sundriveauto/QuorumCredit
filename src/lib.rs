@@ -43,6 +43,8 @@ mod is_eligible_token_filter_test;
 mod vote_slash_auto_execute_test;
 #[cfg(test)]
 mod repayment_reminder_test;
+#[cfg(test)]
+mod mint_reputation_nft_test;
 
 // ── Storage Keys ──────────────────────────────────────────────────────────────
 
